@@ -547,14 +547,22 @@ class _CodeFieldState extends State<CodeField> {
 
   double _getPopupLeftOffset(TextPainter textPainter) {
     return max(
-      _getCaretOffset(textPainter).dx + widget.padding.left - widget.controller.horizontalCodeScroll!.offset + (_editorOffset?.dx ?? 0),
+      _getCaretOffset(textPainter).dx +
+          widget.padding.left -
+          (widget.controller.codeScroll?.hasClients == true ? widget.controller.codeScroll?.offset ?? 0 : 0) +
+          (_editorOffset?.dx ?? 0),
       0,
     );
   }
 
   double _getPopupTopOffset(TextPainter textPainter, double caretHeight) {
     return max(
-      _getCaretOffset(textPainter).dy + caretHeight + 16 + widget.padding.top - widget.controller.codeScroll!.offset + (_editorOffset?.dy ?? 0),
+      _getCaretOffset(textPainter).dy +
+          caretHeight +
+          16 +
+          widget.padding.top -
+          (widget.controller.codeScroll?.hasClients == true ? widget.controller.codeScroll?.offset ?? 0 : 0) +
+          (_editorOffset?.dy ?? 0),
       0,
     );
   }
