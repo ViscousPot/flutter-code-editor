@@ -82,6 +82,7 @@ class CodeController extends TextEditingController {
   bool _isLoadingChunk = false;
   int? _lastRequestedChunkStart;
   int get lineOffset => _currentChunk?.startLine ?? 0;
+  ValueNotifier<bool> fileLoading = ValueNotifier(false);
 
   Mode? _language;
 
@@ -249,6 +250,8 @@ class CodeController extends TextEditingController {
   Future<void> openFile(String filePath) async {
     await _closeCurrentFile();
 
+    fileLoading.value = true;
+
     try {
       _filePath = filePath;
       final file = File(filePath);
@@ -267,6 +270,8 @@ class CodeController extends TextEditingController {
       await _closeCurrentFile();
       rethrow;
     }
+
+    fileLoading.value = false;
   }
 
   Future<void> _buildLineOffsetIndex() async {

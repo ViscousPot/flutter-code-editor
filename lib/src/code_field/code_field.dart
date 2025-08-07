@@ -204,14 +204,12 @@ class CodeField extends StatefulWidget {
     this.focusNode,
     this.onChanged,
     @Deprecated('Use gutterStyle instead') this.lineNumbers,
-    @Deprecated('Use gutterStyle instead')
-    this.lineNumberStyle = const GutterStyle(),
+    @Deprecated('Use gutterStyle instead') this.lineNumberStyle = const GutterStyle(),
   })  : assert(
             gutterStyle == null || lineNumbers == null,
             'Can not provide gutterStyle and lineNumbers at the same time. '
             'Please use gutterStyle and provide necessary columns to show/hide'),
-        gutterStyle = gutterStyle ??
-            ((lineNumbers == false) ? GutterStyle.none : lineNumberStyle);
+        gutterStyle = gutterStyle ?? ((lineNumbers == false) ? GutterStyle.none : lineNumberStyle);
 
   @override
   State<CodeField> createState() => _CodeFieldState();
@@ -401,9 +399,7 @@ class _CodeFieldState extends State<CodeField> {
 
     final themeData = Theme.of(context);
     final styles = CodeTheme.of(context)?.styles;
-    _backgroundCol = widget.background ??
-        styles?[rootKey]?.backgroundColor ??
-        DefaultStyles.backgroundColor;
+    _backgroundCol = widget.background ?? styles?[rootKey]?.backgroundColor ?? DefaultStyles.backgroundColor;
 
     if (widget.decoration != null) {
       _backgroundCol = null;
@@ -465,12 +461,21 @@ class _CodeFieldState extends State<CodeField> {
         color: _backgroundCol,
         key: _codeFieldKey,
         padding: const EdgeInsets.only(left: 8),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (widget.gutterStyle.showGutter) _buildGutter(),
-            Expanded(key: _editorKey, child: editingField),
-          ],
+        child: ValueListenableBuilder(
+          valueListenable: widget.controller.fileLoading,
+          builder: (context, isLoading, _) => isLoading
+              ? Center(
+                  child: CircularProgressIndicator(
+                    color: widget.cursorColor ?? defaultTextStyle.color,
+                  ),
+                )
+              : Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (widget.gutterStyle.showGutter) _buildGutter(),
+                    Expanded(key: _editorKey, child: editingField),
+                  ],
+                ),
         ),
       ),
     );
@@ -478,11 +483,9 @@ class _CodeFieldState extends State<CodeField> {
 
   Widget _buildGutter() {
     final lineNumberSize = textStyle.fontSize;
-    final lineNumberColor =
-        widget.gutterStyle.textStyle?.color ?? textStyle.color?.withOpacity(.5);
+    final lineNumberColor = widget.gutterStyle.textStyle?.color ?? textStyle.color?.withOpacity(.5);
 
-    final lineNumberTextStyle =
-        (widget.gutterStyle.textStyle ?? textStyle).copyWith(
+    final lineNumberTextStyle = (widget.gutterStyle.textStyle ?? textStyle).copyWith(
       color: lineNumberColor,
       fontFamily: textStyle.fontFamily,
       fontSize: lineNumberSize,
@@ -512,8 +515,7 @@ class _CodeFieldState extends State<CodeField> {
 
     final leftOffset = _getPopupLeftOffset(textPainter);
     final normalTopOffset = _getPopupTopOffset(textPainter, caretHeight);
-    final flippedTopOffset = normalTopOffset -
-        (Sizes.autocompletePopupMaxHeight + caretHeight + Sizes.caretPadding);
+    final flippedTopOffset = normalTopOffset - (Sizes.autocompletePopupMaxHeight + caretHeight + Sizes.caretPadding);
 
     setState(() {
       _normalPopupOffset = Offset(leftOffset, normalTopOffset);
@@ -536,7 +538,7 @@ class _CodeFieldState extends State<CodeField> {
   }
 
   double _getCaretHeight(TextPainter textPainter) {
-    final double? caretFullHeight = textPainter.getFullHeightForCaret(
+    final double caretFullHeight = textPainter.getFullHeightForCaret(
       widget.controller.selection.base,
       Rect.zero,
     );
@@ -545,29 +547,20 @@ class _CodeFieldState extends State<CodeField> {
 
   double _getPopupLeftOffset(TextPainter textPainter) {
     return max(
-      _getCaretOffset(textPainter).dx +
-          widget.padding.left -
-          widget.controller.horizontalCodeScroll!.offset +
-          (_editorOffset?.dx ?? 0),
+      _getCaretOffset(textPainter).dx + widget.padding.left - widget.controller.horizontalCodeScroll!.offset + (_editorOffset?.dx ?? 0),
       0,
     );
   }
 
   double _getPopupTopOffset(TextPainter textPainter, double caretHeight) {
     return max(
-      _getCaretOffset(textPainter).dy +
-          caretHeight +
-          16 +
-          widget.padding.top -
-          widget.controller.codeScroll!.offset +
-          (_editorOffset?.dy ?? 0),
+      _getCaretOffset(textPainter).dy + caretHeight + 16 + widget.padding.top - widget.controller.codeScroll!.offset + (_editorOffset?.dy ?? 0),
       0,
     );
   }
 
   void _onPopupStateChanged() {
-    final shouldShow =
-        widget.controller.popupController.shouldShow && windowSize != null;
+    final shouldShow = widget.controller.popupController.shouldShow && windowSize != null;
     if (!shouldShow) {
       _suggestionsPopup?.remove();
       _suggestionsPopup = null;
@@ -599,7 +592,7 @@ class _CodeFieldState extends State<CodeField> {
 
   OverlayEntry _buildSearchOverlay() {
     final colorScheme = Theme.of(context).colorScheme;
-    final borderColor = _getTextColorFromTheme() ?? colorScheme.onBackground;
+    final borderColor = _getTextColorFromTheme() ?? colorScheme.onSurface;
     return OverlayEntry(
       builder: (context) {
         return Positioned(
