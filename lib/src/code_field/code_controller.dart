@@ -1,6 +1,7 @@
 // ignore_for_file: parameter_assignments
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -73,6 +74,8 @@ class CodeController extends TextEditingController {
   final textKey = GlobalKey();
 
   // File handling properties
+  bool fileAutoSave = false;
+  Timer? _autoSaveDebounce;
   String? _filePath;
   RandomAccessFile? _fileHandle;
   int? _totalFileSize;
@@ -260,7 +263,7 @@ class CodeController extends TextEditingController {
         throw FileSystemException('File not found: $filePath');
       }
 
-      _fileHandle = await file.open();
+      _fileHandle = await file.open(mode: FileMode.append);
       _totalFileSize = await _fileHandle!.length();
 
       await _buildLineOffsetIndex();
@@ -294,6 +297,17 @@ class CodeController extends TextEditingController {
       }
       position += bytesRead;
     }
+  }
+
+  Future<void> saveChunk() async {
+    if (_fileHandle == null || _currentChunk == null) return;
+
+    final newText = _code.text;
+    final encoded = utf8.encode(newText);
+    final start = _currentChunk!.fileStartOffset;
+
+    await _fileHandle!.setPosition(start);
+    await _fileHandle!.writeFrom(encoded);
   }
 
   Future<void> _loadChunk(int startLine, {(int, double)? maintainScrollPositionData}) async {
@@ -687,6 +701,7 @@ class CodeController extends TextEditingController {
   String get fullText => _code.text;
 
   set fullText(String fullText) {
+    unawaited(_closeCurrentFile());
     _updateCodeIfChanged(_replaceTabsWithSpacesIfNeeded(fullText));
     super.value = TextEditingValue(text: _code.visibleText);
   }
@@ -772,6 +787,13 @@ class CodeController extends TextEditingController {
       unawaited(generateSuggestions());
     } else if (hasSelectionChanged) {
       popupController.hide();
+    }
+
+    if (fileAutoSave) {
+      _autoSaveDebounce?.cancel();
+      _autoSaveDebounce = Timer(const Duration(milliseconds: 750), () {
+        unawaited(saveChunk());
+      });
     }
   }
 
@@ -1233,6 +1255,7 @@ class CodeController extends TextEditingController {
     _disposed = true;
     _debounce?.cancel();
 
+    _autoSaveDebounce?.cancel();
     unawaited(_closeCurrentFile());
 
     historyController.dispose();
