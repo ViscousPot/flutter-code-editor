@@ -418,6 +418,7 @@ class _CodeFieldState extends State<CodeField> {
     textStyle = defaultTextStyle.merge(widget.textStyle);
 
     final codeField = TextField(
+      key: widget.controller.textKey,
       focusNode: _focusNode,
       scrollPadding: widget.padding,
       style: textStyle,

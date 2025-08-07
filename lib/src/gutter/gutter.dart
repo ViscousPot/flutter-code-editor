@@ -98,7 +98,7 @@ class GutterWidget extends StatelessWidget {
       }
 
       tableRows[lineIndex].children![_lineNumberColumn] = Text(
-        style.showLineNumbers ? '${i + 1}' : ' ',
+        style.showLineNumbers ? '${i + 1 + codeController.lineOffset}' : ' ',
         style: style.textStyle,
         textAlign: style.textAlign,
       );

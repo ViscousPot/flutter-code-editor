@@ -1,6 +1,8 @@
 // ignore_for_file: parameter_assignments
 
 import 'dart:async';
+import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
@@ -36,12 +38,50 @@ import 'actions/undo.dart';
 import 'search_result_highlighted_builder.dart';
 import 'span_builder.dart';
 
+class ChunkConfig {
+  final int chunkSize;
+  final int chunkLineOverlap;
+
+  const ChunkConfig({
+    this.chunkSize = 500,
+    this.chunkLineOverlap = 50,
+  });
+}
+
+class FileChunk {
+  final int startLine;
+  final int endLine;
+  final List<String> lines;
+  final int fileStartOffset;
+  final int fileEndOffset;
+
+  FileChunk({
+    required this.startLine,
+    required this.endLine,
+    required this.lines,
+    required this.fileStartOffset,
+    required this.fileEndOffset,
+  });
+}
+
 class CodeController extends TextEditingController {
   // Add a controller
   LinkedScrollControllerGroup? controllers;
   ScrollController? numberScroll;
   ScrollController? codeScroll;
   ScrollController? horizontalCodeScroll;
+  final textKey = GlobalKey();
+
+  // File handling properties
+  String? _filePath;
+  RandomAccessFile? _fileHandle;
+  int? _totalFileSize;
+  List<int>? _lineOffsets;
+  FileChunk? _currentChunk;
+  final ChunkConfig _chunkConfig;
+  bool _isLoadingChunk = false;
+  int? _lastRequestedChunkStart;
+  int get lineOffset => _currentChunk?.startLine ?? 0;
 
   Mode? _language;
 
@@ -107,6 +147,8 @@ class CodeController extends TextEditingController {
 
   Code _code;
 
+  final List<LineMetrics> _cachedLineMetrics = [];
+
   final _styleList = <TextStyle>[];
   final _modifierMap = <String, CodeModifier>{};
   late PopupController popupController;
@@ -116,11 +158,9 @@ class CodeController extends TextEditingController {
   @internal
   late final searchController = CodeSearchController(codeController: this);
 
-  SearchSettingsController get _searchSettingsController =>
-      searchController.settingsController;
+  SearchSettingsController get _searchSettingsController => searchController.settingsController;
 
-  SearchNavigationController get _searchNavigationController =>
-      searchController.navigationController;
+  SearchNavigationController get _searchNavigationController => searchController.navigationController;
 
   @internal
   SearchResult fullSearchResult = SearchResult.empty;
@@ -171,10 +211,12 @@ class CodeController extends TextEditingController {
     this.readOnly = false,
     this.params = const EditorParams(),
     this.modifiers = defaultCodeModifiers,
+    ChunkConfig chunkConfig = const ChunkConfig(),
   })  : _analyzer = analyzer,
         _readOnlySectionNames = readOnlySectionNames,
         _code = Code.empty,
-        _isTabReplacementEnabled = modifiers.any((e) => e is TabModifier) {
+        _isTabReplacementEnabled = modifiers.any((e) => e is TabModifier),
+        _chunkConfig = chunkConfig {
     setLanguage(language, analyzer: analyzer);
     this.visibleSectionNames = visibleSectionNames;
     _code = _createCode(text ?? '');
@@ -202,6 +244,216 @@ class CodeController extends TextEditingController {
     popupController = PopupController(onCompletionSelected: insertSelectedWord);
 
     unawaited(analyzeCode());
+  }
+
+  Future<void> openFile(String filePath) async {
+    await _closeCurrentFile();
+
+    try {
+      _filePath = filePath;
+      final file = File(filePath);
+
+      if (!await file.exists()) {
+        throw FileSystemException('File not found: $filePath');
+      }
+
+      _fileHandle = await file.open();
+      _totalFileSize = await _fileHandle!.length();
+
+      await _buildLineOffsetIndex();
+      await _loadChunk(0);
+      codeScroll?.addListener(_onScroll);
+    } catch (e) {
+      await _closeCurrentFile();
+      rethrow;
+    }
+  }
+
+  Future<void> _buildLineOffsetIndex() async {
+    if (_fileHandle == null) return;
+
+    _lineOffsets = [0];
+    await _fileHandle!.setPosition(0);
+
+    final buffer = List<int>.filled(8192, 0);
+    int position = 0;
+
+    while (position < _totalFileSize!) {
+      final bytesRead = await _fileHandle!.readInto(buffer);
+      if (bytesRead == 0) break;
+
+      for (int i = 0; i < bytesRead; i++) {
+        if (buffer[i] == 10) {
+          _lineOffsets!.add(position + i + 1);
+        }
+      }
+      position += bytesRead;
+    }
+  }
+
+  Future<void> _loadChunk(int startLine, {(int, double)? maintainScrollPositionData}) async {
+    if (_isLoadingChunk || _fileHandle == null || _lineOffsets == null) return;
+
+    final totalLines = _lineOffsets!.length - 1;
+    final actualStartLine = math.max(0, startLine);
+
+    if (_lastRequestedChunkStart == actualStartLine) {
+      return;
+    }
+
+    _isLoadingChunk = true;
+    _lastRequestedChunkStart = actualStartLine;
+
+    try {
+      final endLine = math.min(totalLines, actualStartLine + _chunkConfig.chunkSize);
+
+      if (actualStartLine >= totalLines) return;
+
+      final startOffset = _lineOffsets![actualStartLine];
+      final endOffset = endLine < totalLines ? _lineOffsets![endLine] : _totalFileSize!;
+
+      await _fileHandle!.setPosition(startOffset);
+      final chunkSize = endOffset - startOffset;
+      final buffer = List<int>.filled(chunkSize, 0);
+      await _fileHandle!.readInto(buffer);
+
+      final chunkText = String.fromCharCodes(buffer);
+      final lines = chunkText.split('\n');
+
+      if (lines.isNotEmpty && lines.last.isEmpty) {
+        lines.removeLast();
+      }
+
+      _currentChunk = FileChunk(
+        startLine: actualStartLine,
+        endLine: endLine,
+        lines: lines,
+        fileStartOffset: startOffset,
+        fileEndOffset: endOffset,
+      );
+
+      if (maintainScrollPositionData != null && codeScroll != null) {
+        if (codeScroll!.hasClients) {
+          final targetScrollOffset = maintainScrollPositionData.$1 * maintainScrollPositionData.$2;
+          final maxScroll = codeScroll!.position.maxScrollExtent;
+          final scrollOffset = math.min(targetScrollOffset, maxScroll);
+          codeScroll!.jumpTo(scrollOffset);
+        }
+      }
+
+      final chunkContent = lines.join('\n');
+      _updateCodeIfChanged(chunkContent);
+      super.value = TextEditingValue(text: _code.visibleText);
+    } catch (e) {
+      print('Error loading chunk: $e');
+      _lastRequestedChunkStart = null;
+    } finally {
+      _isLoadingChunk = false;
+    }
+  }
+
+  void _onScroll() {
+    if (_isLoadingChunk || _currentChunk == null || _fileHandle == null || codeScroll == null || !codeScroll!.hasClients) {
+      return;
+    }
+
+    final chunkStartLine = _currentChunk!.startLine;
+    final chunkEndLine = _currentChunk!.endLine;
+    final overlapSize = _chunkConfig.chunkLineOverlap;
+
+    final nextLoadTriggerLine = chunkEndLine - overlapSize;
+    final prevLoadTriggerLine = chunkStartLine + overlapSize;
+
+    EditableTextState? editableTextState;
+
+    void visitor(Element element) {
+      if (element is StatefulElement && element.state is EditableTextState) {
+        editableTextState = element.state as EditableTextState;
+      } else {
+        element.visitChildren(visitor);
+      }
+    }
+
+    final context = textKey.currentContext;
+    if (context != null) {
+      context.visitChildElements(visitor);
+    }
+
+    if (_cachedLineMetrics.isEmpty) {
+      final textStyle = editableTextState!.widget.style;
+
+      final textPainter = TextPainter(
+        text: TextSpan(text: text, style: textStyle),
+        textDirection: TextDirection.ltr,
+      );
+
+      final box = editableTextState!.context.findRenderObject()! as RenderBox;
+      final availableWidth = box.size.width;
+
+      textPainter.layout(maxWidth: availableWidth);
+
+      final lineMetrics = textPainter.computeLineMetrics();
+
+      _cachedLineMetrics.clear();
+      _cachedLineMetrics.addAll(lineMetrics);
+    }
+
+    if (editableTextState != null && _cachedLineMetrics.isNotEmpty) {
+      final box = editableTextState!.context.findRenderObject()! as RenderBox;
+      final lineHeight = _cachedLineMetrics[0].height;
+
+      final scrollOffset = codeScroll!.offset;
+      final firstVisibleLine = (scrollOffset / lineHeight).floor();
+
+      final double viewportHeight = box.size.height;
+      final double visibleBottom = scrollOffset + viewportHeight;
+      final lastVisibleLine = (visibleBottom / lineHeight).floor().clamp(0, _cachedLineMetrics.length - 1);
+
+      if ((chunkStartLine + firstVisibleLine) >= nextLoadTriggerLine) {
+        final nextChunkStart = _currentChunk!.endLine - (overlapSize * 2);
+        final totalLines = _lineOffsets!.length - 1;
+
+        if (nextChunkStart < totalLines && _lastRequestedChunkStart != nextChunkStart) {
+          unawaited(_loadChunk(nextChunkStart, maintainScrollPositionData: (firstVisibleLine + chunkStartLine - nextChunkStart, lineHeight)));
+        }
+      } else if (lastVisibleLine + chunkStartLine <= prevLoadTriggerLine) {
+        final prevChunkStart = math.max(0, _currentChunk!.startLine - _chunkConfig.chunkSize + _chunkConfig.chunkLineOverlap);
+
+        if (prevChunkStart >= 0 && _lastRequestedChunkStart != prevChunkStart) {
+          unawaited(_loadChunk(prevChunkStart, maintainScrollPositionData: (chunkStartLine + firstVisibleLine, lineHeight)));
+        }
+      }
+    }
+  }
+
+  Future<void> _closeCurrentFile() async {
+    if (_filePath != null) {
+      codeScroll?.removeListener(_onScroll);
+    }
+
+    await _fileHandle?.close();
+    _fileHandle = null;
+    _filePath = null;
+    _totalFileSize = null;
+    _lineOffsets = null;
+    _currentChunk = null;
+    _lastRequestedChunkStart = null;
+  }
+
+  String? get currentFilePath => _filePath;
+
+  ChunkConfig get chunkConfig => _chunkConfig;
+
+  Map<String, dynamic>? get chunkInfo {
+    if (_currentChunk == null || _lineOffsets == null) return null;
+
+    return {
+      'startLine': _currentChunk!.startLine,
+      'endLine': _currentChunk!.endLine,
+      'totalLines': _lineOffsets!.length - 1,
+      'chunkLines': _currentChunk!.lines.length,
+      'isFileMode': _filePath != null,
+    };
   }
 
   void _updateSearchResult() {
@@ -357,15 +609,13 @@ class CodeController extends TextEditingController {
       return;
     }
 
-    final currentMatchIndex =
-        _searchNavigationController.value.currentMatchIndex;
+    final currentMatchIndex = _searchNavigationController.value.currentMatchIndex;
 
     if (searchController.shouldShow && currentMatchIndex != null) {
       final fullSelection = code.hiddenRanges.recoverSelection(selection);
       final currentMatch = fullSearchResult.matches[currentMatchIndex];
 
-      if (fullSelection.start == currentMatch.start &&
-          fullSelection.end == currentMatch.end) {
+      if (fullSelection.start == currentMatch.start && fullSelection.end == currentMatch.end) {
         _searchNavigationController.moveNext();
         return;
       }
@@ -404,9 +654,7 @@ class CodeController extends TextEditingController {
       additionalSpaceIfEnd = ' ';
     } else {
       final charAfterText = text[endReplacingPosition];
-      if (charAfterText != ' ' &&
-          !StringUtil.isDigit(charAfterText) &&
-          !StringUtil.isLetterEng(charAfterText)) {
+      if (charAfterText != ' ' && !StringUtil.isDigit(charAfterText) && !StringUtil.isLetterEng(charAfterText)) {
         // ex. case ';' or other finalizer, or symbol
         offsetIfEndsWithSpace = 0;
       }
@@ -484,8 +732,7 @@ class CodeController extends TextEditingController {
         return;
       }
 
-      final selectionSnapshot =
-          code.hiddenRanges.recoverSelection(newValue.selection);
+      final selectionSnapshot = code.hiddenRanges.recoverSelection(newValue.selection);
       _updateCodeIfChanged(editResult.fullTextAfter);
 
       if (newValue.text != _code.visibleText) {
@@ -525,8 +772,7 @@ class CodeController extends TextEditingController {
 
   void applyHistoryRecord(CodeHistoryRecord record) {
     _code = record.code.foldedAs(_code);
-    final fullSelection =
-        record.code.hiddenRanges.recoverSelection(record.selection);
+    final fullSelection = record.code.hiddenRanges.recoverSelection(record.selection);
     final cutSelection = _code.hiddenRanges.cutSelection(fullSelection);
 
     super.value = TextEditingValue(
@@ -613,8 +859,7 @@ class CodeController extends TextEditingController {
   bool _anySelectedLineUncommented() {
     return _anySelectedLine((line) {
       for (final commentType in SingleLineComments.byMode[language] ?? []) {
-        if (line.trimLeft().startsWith(commentType) ||
-            line.hasOnlyWhitespaces()) {
+        if (line.trimLeft().startsWith(commentType) || line.hasOnlyWhitespaces()) {
           return false;
         }
       }
@@ -665,8 +910,7 @@ class CodeController extends TextEditingController {
         return line;
       }
 
-      for (final sequence
-          in SingleLineComments.byMode[language] ?? <String>[]) {
+      for (final sequence in SingleLineComments.byMode[language] ?? <String>[]) {
         // If there is a space after a sequence
         // we should remove it with the sequence.
         if (line.trim().startsWith('$sequence ')) {
@@ -738,8 +982,7 @@ class CodeController extends TextEditingController {
       baseOffset: firstLineStart,
       extentOffset: firstLineStart + modifiedLinesString.length,
     );
-    final finalVisibleSelection =
-        _code.hiddenRanges.cutSelection(finalFullSelection);
+    final finalVisibleSelection = _code.hiddenRanges.cutSelection(finalFullSelection);
 
     // TODO(yescorp): move to the listener both here and in `set value`
     //  or come up with a different approach
@@ -826,8 +1069,7 @@ class CodeController extends TextEditingController {
       return;
     }
 
-    final suggestions =
-        (await autocompleter.getSuggestions(prefix)).toList(growable: false);
+    final suggestions = (await autocompleter.getSuggestions(prefix)).toList(growable: false);
 
     if (suggestions.isNotEmpty) {
       popupController.show(suggestions);
@@ -929,8 +1171,7 @@ class CodeController extends TextEditingController {
       style: style,
     );
 
-    final visibleSearchResult =
-        _code.hiddenRanges.cutSearchResult(fullSearchResult);
+    final visibleSearchResult = _code.hiddenRanges.cutSearchResult(fullSearchResult);
 
     // TODO(alexeyinkin): Return cached if the value did not change, https://github.com/akvelon/flutter-code-editor/issues/127
     lastTextSpan = SearchResultHighlightedBuilder(
@@ -986,6 +1227,9 @@ class CodeController extends TextEditingController {
   void dispose() {
     _disposed = true;
     _debounce?.cancel();
+
+    unawaited(_closeCurrentFile());
+
     historyController.dispose();
     searchController.dispose();
 
