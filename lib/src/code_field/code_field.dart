@@ -218,11 +218,6 @@ class CodeField extends StatefulWidget {
 }
 
 class _CodeFieldState extends State<CodeField> {
-  // Add a controller
-  LinkedScrollControllerGroup? _controllers;
-  ScrollController? _numberScroll;
-  ScrollController? _codeScroll;
-  ScrollController? _horizontalCodeScroll;
   final _codeFieldKey = GlobalKey();
 
   OverlayEntry? _suggestionsPopup;
@@ -245,9 +240,9 @@ class _CodeFieldState extends State<CodeField> {
   @override
   void initState() {
     super.initState();
-    _controllers = LinkedScrollControllerGroup();
-    _numberScroll = _controllers?.addAndGet();
-    _codeScroll = _controllers?.addAndGet();
+    widget.controller.controllers = LinkedScrollControllerGroup();
+    widget.controller.numberScroll = widget.controller.controllers?.addAndGet();
+    widget.controller.codeScroll = widget.controller.controllers?.addAndGet();
 
     widget.controller.addListener(_onTextChanged);
     widget.controller.addListener(_updatePopupOffset);
@@ -255,7 +250,7 @@ class _CodeFieldState extends State<CodeField> {
     widget.controller.searchController.addListener(
       _onSearchControllerChange,
     );
-    _horizontalCodeScroll = ScrollController();
+    widget.controller.horizontalCodeScroll = ScrollController();
     _focusNode = widget.focusNode ?? FocusNode();
     _focusNode!.attach(context, onKeyEvent: _onKeyEvent);
 
@@ -292,9 +287,9 @@ class _CodeFieldState extends State<CodeField> {
     );
     _searchPopup?.remove();
     _searchPopup = null;
-    _numberScroll?.dispose();
-    _codeScroll?.dispose();
-    _horizontalCodeScroll?.dispose();
+    widget.controller.numberScroll?.dispose();
+    widget.controller.codeScroll?.dispose();
+    widget.controller.horizontalCodeScroll?.dispose();
     super.dispose();
   }
 
@@ -350,12 +345,12 @@ class _CodeFieldState extends State<CodeField> {
       if (line.length > longestLine.length) longestLine = line;
     });
 
-    if (_codeScroll != null && _editorKey.currentContext != null) {
+    if (widget.controller.codeScroll != null && _editorKey.currentContext != null) {
       final box = _editorKey.currentContext!.findRenderObject() as RenderBox?;
       _editorOffset = box?.localToGlobal(Offset.zero);
       if (_editorOffset != null) {
         var fixedOffset = _editorOffset!;
-        fixedOffset += Offset(0, _codeScroll!.offset);
+        fixedOffset += Offset(0, widget.controller.codeScroll!.offset);
         _editorOffset = fixedOffset;
       }
     }
@@ -394,7 +389,7 @@ class _CodeFieldState extends State<CodeField> {
         right: widget.padding.right,
       ),
       scrollDirection: Axis.horizontal,
-      controller: _horizontalCodeScroll,
+      controller: widget.controller.horizontalCodeScroll,
       child: intrinsic,
     );
   }
@@ -433,7 +428,7 @@ class _CodeFieldState extends State<CodeField> {
       minLines: widget.minLines,
       maxLines: widget.maxLines,
       expands: widget.expands,
-      scrollController: _codeScroll,
+      scrollController: widget.controller.codeScroll,
       decoration: const InputDecoration(
         isCollapsed: true,
         contentPadding: EdgeInsets.symmetric(vertical: 16),
@@ -506,7 +501,7 @@ class _CodeFieldState extends State<CodeField> {
     return GutterWidget(
       codeController: widget.controller,
       style: gutterStyle,
-      scrollController: _numberScroll,
+      scrollController: widget.controller.numberScroll,
     );
   }
 
@@ -551,7 +546,7 @@ class _CodeFieldState extends State<CodeField> {
     return max(
       _getCaretOffset(textPainter).dx +
           widget.padding.left -
-          _horizontalCodeScroll!.offset +
+          widget.controller.horizontalCodeScroll!.offset +
           (_editorOffset?.dx ?? 0),
       0,
     );
@@ -563,7 +558,7 @@ class _CodeFieldState extends State<CodeField> {
           caretHeight +
           16 +
           widget.padding.top -
-          _codeScroll!.offset +
+          widget.controller.codeScroll!.offset +
           (_editorOffset?.dy ?? 0),
       0,
     );

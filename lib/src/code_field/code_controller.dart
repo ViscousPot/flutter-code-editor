@@ -6,6 +6,7 @@ import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:highlight/highlight_core.dart';
+import 'package:linked_scroll_controller/linked_scroll_controller.dart';
 import 'package:meta/meta.dart';
 
 import '../../flutter_code_editor.dart';
@@ -36,6 +37,12 @@ import 'search_result_highlighted_builder.dart';
 import 'span_builder.dart';
 
 class CodeController extends TextEditingController {
+  // Add a controller
+  LinkedScrollControllerGroup? controllers;
+  ScrollController? numberScroll;
+  ScrollController? codeScroll;
+  ScrollController? horizontalCodeScroll;
+
   Mode? _language;
 
   /// A highlight language to parse the text with
