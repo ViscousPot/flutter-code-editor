@@ -87,6 +87,7 @@ class CodeController extends TextEditingController {
   int get lineOffset => _currentChunk?.startLine ?? 0;
   ValueNotifier<bool> fileLoading = ValueNotifier(false);
   ValueNotifier<bool> fileSaving = ValueNotifier(false);
+  ValueNotifier<bool> fileTooLarge = ValueNotifier(false);
   bool reversed = false;
 
   Mode? _language;
@@ -147,7 +148,7 @@ class CodeController extends TextEditingController {
   /// Makes the text un-editable, but allows to set the full text.
   /// Focusing and moving the selection inside of a [CodeField] will
   /// still be possible.
-  final bool readOnly;
+  bool readOnly;
 
   String get languageId => _languageId;
 
@@ -253,8 +254,23 @@ class CodeController extends TextEditingController {
     unawaited(analyzeCode());
   }
 
+  Future<int> countLines(String path) async {
+    final file = File(path);
+    final lineStream = file.openRead().transform(utf8.decoder).transform(const LineSplitter());
+    var count = 0;
+    await for (final _ in lineStream) {
+      count++;
+    }
+    return count;
+  }
+
   Future<void> openFile(String filePath) async {
     await _closeCurrentFile();
+
+    if (await countLines(filePath) > chunkConfig.chunkSize) {
+      fileTooLarge.value = true;
+      readOnly = true;
+    }
 
     fileLoading.value = true;
 
@@ -302,16 +318,16 @@ class CodeController extends TextEditingController {
     }
   }
 
-  Future<void> saveChunk() async {
-    if (_fileHandle == null || _currentChunk == null) return;
+  Future<void> saveFile() async {
+    if (_fileHandle == null || readOnly) return;
 
     fileSaving.value = true;
 
     final newText = _code.text;
     final encoded = utf8.encode(newText);
-    final start = _currentChunk!.fileStartOffset;
 
-    await _fileHandle!.setPosition(start);
+    await _fileHandle!.truncate(0);
+    await _fileHandle!.setPosition(0);
     await _fileHandle!.writeFrom(encoded);
 
     await Future.delayed(
@@ -474,7 +490,7 @@ class CodeController extends TextEditingController {
     final lastVisibleLineOffset = (visibleBottom / lineHeight).floor().clamp(0, _cachedLineMetrics.length - 1);
 
     if (!reversed) {
-      final nextLoadTriggerLine = chunkEndLine - overlapSize;
+      final nextLoadTriggerLine = totalLines <= chunkConfig.chunkSize ? double.infinity : chunkEndLine - overlapSize;
       final prevLoadTriggerLine = chunkStartLine == 0 ? -1 : chunkStartLine + overlapSize;
 
       if ((chunkStartLine + firstVisibleLineOffset) >= nextLoadTriggerLine) {
@@ -866,7 +882,7 @@ class CodeController extends TextEditingController {
     if (fileAutoSave) {
       _autoSaveDebounce?.cancel();
       _autoSaveDebounce = Timer(const Duration(milliseconds: 750), () {
-        unawaited(saveChunk());
+        unawaited(saveFile());
       });
     }
   }
