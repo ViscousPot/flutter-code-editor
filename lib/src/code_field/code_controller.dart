@@ -879,7 +879,7 @@ class CodeController extends TextEditingController {
       popupController.hide();
     }
 
-    if (fileAutoSave) {
+    if (!readOnly && fileAutoSave) {
       _autoSaveDebounce?.cancel();
       _autoSaveDebounce = Timer(const Duration(milliseconds: 750), () {
         unawaited(saveFile());
