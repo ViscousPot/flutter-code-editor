@@ -268,8 +268,10 @@ class CodeController extends TextEditingController {
     await _closeCurrentFile();
 
     if (await countLines(filePath) > chunkConfig.chunkSize) {
-      fileTooLarge.value = true;
-      readOnly = true;
+      if (!readOnly) {
+        fileTooLarge.value = true;
+        readOnly = true;
+      }
     }
 
     fileLoading.value = true;
